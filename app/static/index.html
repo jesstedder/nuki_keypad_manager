@@ -274,18 +274,27 @@
         const chips = allLocks.map(l => {
           const entry = entryByLockId.get(String(l.id));
           if (!entry) return `<span class="lock-chip missing">${escapeHtml(l.name)}</span>`;
+          if (entry.failed) {
+            return `<span class="lock-chip failed" title="${escapeHtml(entry.failedReason || 'Sync failed')}">${escapeHtml(l.name)} (failed)</span>`;
+          }
           const label = entry.pending ? `${escapeHtml(l.name)} (syncing…)` : escapeHtml(l.name);
           return `<span class="lock-chip">${label}</span>`;
         }).join('');
         const hasPending = g.entries.some(e => e.pending);
         const pendingAttr = hasPending ? 'disabled title="Still syncing to Nuki, try again shortly"' : '';
+        const key = groupKey(g.name, g.code);
+        const revealed = revealedCodes.has(key);
+        const codeDisplay = revealed ? escapeHtml(String(g.code)) : '••••••';
         return `
           <div class="code-row">
             <div>
               <div class="code-name">${escapeHtml(g.name)}
                 <span class="badge ${badgeClass}">${badgeLabel}</span>
               </div>
-              <div class="code-meta">${formatWindow(first.allowedFromDate, first.allowedUntilDate)}</div>
+              <div class="code-meta">
+                <button type="button" class="code-value" data-reveal="${i}">${codeDisplay}</button>
+                · ${formatWindow(first.allowedFromDate, first.allowedUntilDate)}
+              </div>
               <div>${chips}</div>
             </div>
             <div class="code-actions">
@@ -301,6 +310,14 @@
       });
       listEl.querySelectorAll('button[data-delete]').forEach(btn => {
         btn.addEventListener('click', () => deleteGroup(allGroups[Number(btn.dataset.delete)]));
+      });
+      listEl.querySelectorAll('button[data-reveal]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const g = allGroups[Number(btn.dataset.reveal)];
+          const key = groupKey(g.name, g.code);
+          if (revealedCodes.has(key)) revealedCodes.delete(key); else revealedCodes.add(key);
+          renderGroups();
+        });
       });
     }
 
@@ -385,11 +402,18 @@
         // Nuki's own code list can lag behind these writes until each
         // lock/bridge syncs, so show the intended end state immediately and
         // poll quietly until Nuki's list actually reflects it everywhere.
+        // Partial per-lock failures (e.g. Nuki's account-wide PIN-uniqueness
+        // check rejecting a brand-new lock while others already hold that
+        // PIN) are shown per-lock rather than as a blocking error, since
+        // they can resolve on their own — the poll below will pick it up.
         if (wasEditing && (wasEditing.name !== name || String(wasEditing.code) !== code)) {
           allGroups = allGroups.filter(g => !(g.name === wasEditing.name && String(g.code) === String(wasEditing.code)));
         }
+        const resultByLock = new Map((data.results || []).map(r => [String(r.lockId), r]));
         const optimisticEntries = lockIds.map(lockId => {
           const existing = priorGroup && priorGroup.entries.find(en => String(en.lockId) === String(lockId));
+          const result = resultByLock.get(String(lockId));
+          const failed = !!(result && !result.ok);
           return {
             lockId,
             lockName: lockName(lockId),
@@ -397,11 +421,19 @@
             enabled,
             allowedFromDate: payload.allowedFromDate || null,
             allowedUntilDate: payload.allowedUntilDate || null,
-            pending: !existing,
+            pending: !existing && !failed,
+            failed,
+            failedReason: failed ? result.error : null,
           };
         });
         upsertGroupLocally(name, code, optimisticEntries);
         renderGroups();
+
+        const failedResults = (data.results || []).filter(r => !r.ok);
+        if (failedResults.length) {
+          const detail = failedResults.map(r => `${lockName(r.lockId)}: ${r.error}`).join('; ');
+          showError(`Synced to ${lockIds.length - failedResults.length} of ${lockIds.length} locks so far. Retrying — ${detail}`);
+        }
         pollForSync(name, code, lockIds);
       } catch (err) {
         showError('Could not reach the add-on backend.');
@@ -422,7 +454,7 @@
           allGroups = data.groups;
           renderGroups();
         }
-        if (gotAll) return;
+        if (gotAll) { clearError(); return; }
       } catch (e) {
         // ignore and retry
       }
