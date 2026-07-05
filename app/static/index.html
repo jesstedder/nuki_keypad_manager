@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nuki Keypad Manager</title>
+<style>
+  :root {
+    --bg: #1c1f26;
+    --panel: #262a33;
+    --accent: #4fb0ae;
+    --text: #e7e9ee;
+    --muted: #8b92a3;
+    --danger: #d9635a;
+    --border: #33384433;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px;
+  }
+  h1 {
+    font-size: 1.3rem;
+    margin: 0 0 16px 0;
+    font-weight: 600;
+  }
+  .card {
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+    border: 1px solid #ffffff12;
+  }
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .code-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #ffffff10;
+    gap: 12px;
+  }
+  .code-row:last-child { border-bottom: none; }
+  .code-name { font-weight: 600; }
+  .code-meta { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+  .code-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .badge {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #ffffff14;
+    margin-left: 8px;
+  }
+  .badge.on { background: #2f6f4f; color: #b8f0cf; }
+  .badge.off { background: #6f3a3a; color: #f0c4c4; }
+  .badge.mixed { background: #6f5a2f; color: #f0dcb8; }
+  .lock-chip {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #ffffff14;
+    margin-right: 4px;
+    margin-top: 4px;
+  }
+  .lock-chip.missing { background: transparent; border: 1px dashed #ffffff30; color: var(--muted); }
+  .lock-chip.failed { background: #6f3a3a; color: #f0c4c4; cursor: help; }
+  .code-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    background: none;
+    border: none;
+    padding: 0;
+    font-weight: 400;
+    font-size: 0.8rem;
+    cursor: pointer;
+    text-decoration: underline dotted;
+  }
+  button {
+    background: var(--accent);
+    color: #0a1a19;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.danger { background: var(--danger); color: #2a0d0a; }
+  button.secondary { background: #ffffff1c; color: var(--text); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  input {
+    background: #1a1d24;
+    border: 1px solid #ffffff20;
+    color: var(--text);
+    border-radius: 6px;
+    padding: 8px 10px;
+    width: 100%;
+  }
+  form {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  label { font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; display: block; }
+  .row { display: flex; gap: 8px; }
+  .row > div { flex: 1; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .checkbox-row input { width: auto; }
+  .lock-checks { display: flex; flex-wrap: wrap; gap: 12px; }
+  .lock-checks label { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text); margin-bottom: 0; }
+  .lock-checks input { width: auto; }
+  .form-buttons { display: flex; gap: 8px; }
+  #error {
+    display: none;
+    background: #4a1f1f;
+    color: #f7c9c9;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+  }
+  #empty { color: var(--muted); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <h1>🔑 Nuki Keypad Codes</h1>
+  <div id="error"></div>
+
+  <div class="card">
+    <div class="card-header">
+      <strong>Codes</strong>
+      <button type="button" id="refreshBtn">Refresh</button>
+    </div>
+    <div id="codeList"><div id="empty">Loading…</div></div>
+  </div>
+
+  <div class="card">
+    <strong id="formTitle">Add a new code</strong>
+    <form id="codeForm">
+      <div>
+        <label>Name (max 20 chars)</label>
+        <input type="text" id="name" maxlength="20" required />
+      </div>
+      <div>
+        <label>6-digit code (digits 1-9 only, no leading "12")</label>
+        <input type="text" id="code" pattern="[1-9]{6}" maxlength="6" required />
+      </div>
+      <div class="row">
+        <div>
+          <label>Valid from (optional)</label>
+          <input type="datetime-local" id="fromDate" />
+        </div>
+        <div>
+          <label>Valid until (optional)</label>
+          <input type="datetime-local" id="untilDate" />
+        </div>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="enabled" checked />
+        <label style="margin-bottom: 0;">Enabled</label>
+      </div>
+      <div>
+        <label>Sync to locks</label>
+        <div class="lock-checks" id="lockChecks"></div>
+      </div>
+      <div class="form-buttons">
+        <button type="submit" id="submitBtn">Add Code</button>
+        <button type="button" class="secondary" id="cancelBtn" style="display: none;">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    const errorBox = document.getElementById('error');
+    const listEl = document.getElementById('codeList');
+    const codeForm = document.getElementById('codeForm');
+    const formTitle = document.getElementById('formTitle');
+    const nameInput = document.getElementById('name');
+    const codeInput = document.getElementById('code');
+    const fromDateInput = document.getElementById('fromDate');
+    const untilDateInput = document.getElementById('untilDate');
+    const enabledInput = document.getElementById('enabled');
+    const lockChecksEl = document.getElementById('lockChecks');
+    const submitBtn = document.getElementById('submitBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+
+    let allLocks = [];
+    let allGroups = [];
+    let editingGroup = null; // {name, code} of the group being edited, or null when adding
+    let revealedCodes = new Set(); // "name|code" keys currently shown in plaintext
+    function groupKey(name, code) { return `${name}|${code}`; }
+
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.style.display = 'block';
+    }
+    function clearError() {
+      errorBox.style.display = 'none';
+    }
+    function escapeHtml(str) {
+      return (str || '').replace(/[&<>"']/g, s => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[s]));
+    }
+    function formatWindow(from, until) {
+      if (!from && !until) return 'No time restriction';
+      const f = from ? new Date(from).toLocaleString() : '…';
+      const u = until ? new Date(until).toLocaleString() : '…';
+      return `${f} → ${u}`;
+    }
+    function toLocalInputValue(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    function findGroup(name, code) {
+      return allGroups.find(g => g.name === name && String(g.code) === String(code));
+    }
+    function lockName(lockId) {
+      const l = allLocks.find(l => String(l.id) === String(lockId));
+      return l ? l.name : `Lock ${lockId}`;
+    }
+    function upsertGroupLocally(name, code, entries) {
+      const idx = allGroups.findIndex(g => g.name === name && String(g.code) === String(code));
+      const group = { name, code, entries };
+      if (idx >= 0) allGroups[idx] = group; else allGroups = [group, ...allGroups];
+    }
+
+    async function loadCodes() {
+      clearError();
+      listEl.innerHTML = '<div id="empty">Loading…</div>';
+      try {
+        const res = await fetch('api/codes');
+        const data = await res.json();
+        if (!res.ok) { showError(data.error || 'Failed to load codes.'); return; }
+        allLocks = data.locks;
+        allGroups = data.groups;
+        renderGroups();
+        if (!editingGroup) resetFormToAdd();
+      } catch (e) {
+        showError('Could not reach the add-on backend.');
+      }
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', loadCodes);
+
+    function renderGroups() {
+      if (!allLocks.length) {
+        listEl.innerHTML = '<div id="empty">No locks found on this account.</div>';
+        return;
+      }
+      if (!allGroups.length) {
+        listEl.innerHTML = '<div id="empty">No keypad codes found yet.</div>';
+        return;
+      }
+      listEl.innerHTML = allGroups.map((g, i) => {
+        const allEnabled = g.entries.every(e => e.enabled);
+        const anyEnabled = g.entries.some(e => e.enabled);
+        const badgeClass = allEnabled ? 'on' : (anyEnabled ? 'mixed' : 'off');
+        const badgeLabel = allEnabled ? 'enabled' : (anyEnabled ? 'mixed' : 'disabled');
+        const first = g.entries[0] || {};
+        const entryByLockId = new Map(g.entries.map(e => [String(e.lockId), e]));
+        const chips = allLocks.map(l => {
+          const entry = entryByLockId.get(String(l.id));
+          if (!entry) return `<span class="lock-chip missing">${escapeHtml(l.name)}</span>`;
+          const label = entry.pending ? `${escapeHtml(l.name)} (syncing…)` : escapeHtml(l.name);
+          return `<span class="lock-chip">${label}</span>`;
+        }).join('');
+        const hasPending = g.entries.some(e => e.pending);
+        const pendingAttr = hasPending ? 'disabled title="Still syncing to Nuki, try again shortly"' : '';
+        return `
+          <div class="code-row">
+            <div>
+              <div class="code-name">${escapeHtml(g.name)}
+                <span class="badge ${badgeClass}">${badgeLabel}</span>
+              </div>
+              <div class="code-meta">${formatWindow(first.allowedFromDate, first.allowedUntilDate)}</div>
+              <div>${chips}</div>
+            </div>
+            <div class="code-actions">
+              <button type="button" class="secondary" data-edit="${i}" ${pendingAttr}>Edit</button>
+              <button type="button" class="danger" data-delete="${i}" ${pendingAttr}>Delete</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      listEl.querySelectorAll('button[data-edit]').forEach(btn => {
+        btn.addEventListener('click', () => startEdit(allGroups[Number(btn.dataset.edit)]));
+      });
+      listEl.querySelectorAll('button[data-delete]').forEach(btn => {
+        btn.addEventListener('click', () => deleteGroup(allGroups[Number(btn.dataset.delete)]));
+      });
+    }
+
+    function renderLockChecks(checkedLockIds) {
+      const checked = new Set(checkedLockIds.map(String));
+      lockChecksEl.innerHTML = allLocks.map(l => `
+        <label>
+          <input type="checkbox" value="${l.id}" ${checked.has(String(l.id)) ? 'checked' : ''} />
+          ${escapeHtml(l.name)}
+        </label>
+      `).join('');
+    }
+
+    function resetFormToAdd() {
+      editingGroup = null;
+      formTitle.textContent = 'Add a new code';
+      codeForm.reset();
+      enabledInput.checked = true;
+      renderLockChecks(allLocks.map(l => l.id));
+      cancelBtn.style.display = 'none';
+      submitBtn.textContent = 'Add Code';
+      nameInput.disabled = false;
+      codeInput.disabled = false;
+    }
+
+    function startEdit(group) {
+      clearError();
+      editingGroup = { name: group.name, code: group.code };
+      formTitle.textContent = `Edit "${group.name}"`;
+      nameInput.value = group.name;
+      codeInput.value = group.code;
+      const first = group.entries[0] || {};
+      fromDateInput.value = toLocalInputValue(first.allowedFromDate);
+      untilDateInput.value = toLocalInputValue(first.allowedUntilDate);
+      enabledInput.checked = group.entries.some(e => e.enabled);
+      renderLockChecks(group.entries.map(e => e.lockId));
+      cancelBtn.style.display = 'inline-block';
+      submitBtn.textContent = 'Save changes';
+    }
+
+    cancelBtn.addEventListener('click', resetFormToAdd);
+
+    codeForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError();
+      const name = nameInput.value.trim();
+      const code = codeInput.value.trim();
+      const fromDate = fromDateInput.value;
+      const untilDate = untilDateInput.value;
+      const enabled = enabledInput.checked;
+      const lockIds = Array.from(lockChecksEl.querySelectorAll('input[type=checkbox]:checked')).map(cb => Number(cb.value));
+
+      if (!lockIds.length) { showError('Select at least one lock.'); return; }
+
+      const payload = { name, code, enabled, lockIds };
+      if (fromDate) payload.allowedFromDate = new Date(fromDate).toISOString();
+      if (untilDate) payload.allowedUntilDate = new Date(untilDate).toISOString();
+
+      const wasEditing = editingGroup;
+      const priorGroup = wasEditing ? findGroup(wasEditing.name, wasEditing.code) : null;
+
+      try {
+        let res;
+        if (wasEditing) {
+          payload.current = (priorGroup ? priorGroup.entries : []).map(en => ({ lockId: en.lockId, authId: en.authId }));
+          res = await fetch('api/codes', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+        } else {
+          res = await fetch('api/codes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+        }
+        const data = await res.json();
+        if (!res.ok) { showError(data.error || 'Failed to save code.'); return; }
+        resetFormToAdd();
+
+        // Nuki's own code list can lag behind these writes until each
+        // lock/bridge syncs, so show the intended end state immediately and
+        // poll quietly until Nuki's list actually reflects it everywhere.
+        if (wasEditing && (wasEditing.name !== name || String(wasEditing.code) !== code)) {
+          allGroups = allGroups.filter(g => !(g.name === wasEditing.name && String(g.code) === String(wasEditing.code)));
+        }
+        const optimisticEntries = lockIds.map(lockId => {
+          const existing = priorGroup && priorGroup.entries.find(en => String(en.lockId) === String(lockId));
+          return {
+            lockId,
+            lockName: lockName(lockId),
+            authId: existing ? existing.authId : null,
+            enabled,
+            allowedFromDate: payload.allowedFromDate || null,
+            allowedUntilDate: payload.allowedUntilDate || null,
+            pending: !existing,
+          };
+        });
+        upsertGroupLocally(name, code, optimisticEntries);
+        renderGroups();
+        pollForSync(name, code, lockIds);
+      } catch (err) {
+        showError('Could not reach the add-on backend.');
+      }
+    });
+
+    async function pollForSync(name, code, expectedLockIds, attempt = 0) {
+      if (attempt >= 8) return;
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const res = await fetch('api/codes');
+        if (!res.ok) return pollForSync(name, code, expectedLockIds, attempt + 1);
+        const data = await res.json();
+        const match = data.groups.find(g => g.name === name && String(g.code) === String(code));
+        const gotAll = !!match && expectedLockIds.every(id => match.entries.some(en => String(en.lockId) === String(id)));
+        if (match) {
+          allLocks = data.locks;
+          allGroups = data.groups;
+          renderGroups();
+        }
+        if (gotAll) return;
+      } catch (e) {
+        // ignore and retry
+      }
+      pollForSync(name, code, expectedLockIds, attempt + 1);
+    }
+
+    async function deleteGroup(group) {
+      if (!confirm(`Delete "${group.name}" from every lock it's on?`)) return;
+      clearError();
+      const current = group.entries.map(en => ({ lockId: en.lockId, authId: en.authId }));
+      try {
+        const res = await fetch('api/codes', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ current })
+        });
+        const data = await res.json();
+        if (!res.ok) { showError(data.error || 'Failed to delete code.'); return; }
+        allGroups = allGroups.filter(g => !(g.name === group.name && String(g.code) === String(group.code)));
+        renderGroups();
+      } catch (e) {
+        showError('Could not reach the add-on backend.');
+      }
+    }
+
+    loadCodes();
+  </script>
+</body>
+</html>
