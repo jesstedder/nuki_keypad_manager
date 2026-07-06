@@ -1,5 +1,5 @@
 name: "Nuki Keypad Manager"
-version: "0.2.0"
+version: "0.3.0"
 slug: "nuki_keypad_manager"
 description: "List and create Nuki Keypad PIN codes from a Home Assistant sidebar panel"
 url: "https://github/jesstedder/nuki_keypad_manager"
@@ -13,6 +13,7 @@ ingress_port: 8099
 panel_icon: mdi:dialpad
 panel_title: "Nuki Keypad"
 homeassistant_api: true
+hassio_api: true
 options:
   nuki_api_token: ""
   lock_entities: ""

@@ -28,6 +28,11 @@ HEADERS = {
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 CORE_API_URL = "http://supervisor/core/api"
 CORE_WS_URL = "ws://supervisor/core/websocket"
+HASSIO_SELF_API_URL = "http://supervisor/addons/self"
+
+
+def _ha_auth_headers():
+    return {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
 
 # Nuki activity-log trigger/action codes: developer.nuki.io "Web API Webhooks"
 TRIGGER_LABELS = {
@@ -96,6 +101,16 @@ def _nuki_error_message(resp):
     return resp.text
 
 
+def _supervisor_error_message(resp):
+    try:
+        payload = resp.json()
+    except ValueError:
+        return resp.text
+    if isinstance(payload, dict) and payload.get("message"):
+        return payload["message"]
+    return resp.text
+
+
 def _fetch_locks():
     resp = requests.get(f"{BASE_URL}/smartlock", headers=HEADERS, timeout=15)
     if resp.status_code != 200:
@@ -145,15 +160,24 @@ def _post_logbook_entry(entity_id, name, message):
     try:
         requests.post(
             f"{CORE_API_URL}/services/logbook/log",
-            headers={
-                "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
-                "Content-Type": "application/json",
-            },
+            headers=_ha_auth_headers(),
             json={"name": name, "message": message, "entity_id": entity_id, "domain": "lock"},
             timeout=10,
         )
     except requests.RequestException:
         pass
+
+
+def _fetch_ha_lock_entities():
+    resp = requests.get(f"{CORE_API_URL}/states", headers=_ha_auth_headers(), timeout=10)
+    if resp.status_code != 200:
+        return None, resp
+    entities = [
+        {"entityId": s["entity_id"], "name": s.get("attributes", {}).get("friendly_name", s["entity_id"])}
+        for s in resp.json()
+        if s["entity_id"].startswith("lock.")
+    ]
+    return entities, None
 
 
 def _handle_lock_state_change(entity_id, friendly_name):
@@ -243,6 +267,66 @@ def list_locks():
     if error_resp is not None:
         return jsonify({"error": _nuki_error_message(error_resp)}), error_resp.status_code
     return jsonify(locks)
+
+
+@app.route("/api/lock-mapping", methods=["GET"])
+def get_lock_mapping():
+    """Everything the settings screen needs to build the Nuki-lock ->
+    HA-entity mapping: Nuki's own lock list, HA's lock entities (fetched
+    live via the Core API - not cached, since entities can change), and the
+    mapping currently in effect."""
+    err = _require_token()
+    if err:
+        return err
+    if not SUPERVISOR_TOKEN:
+        return jsonify({"error": "Home Assistant API access is not available to this add-on."}), 400
+
+    nuki_locks, error_resp = _fetch_locks()
+    if error_resp is not None:
+        return jsonify({"error": _nuki_error_message(error_resp)}), error_resp.status_code
+
+    ha_entities, error_resp = _fetch_ha_lock_entities()
+    if error_resp is not None:
+        return jsonify({"error": _supervisor_error_message(error_resp)}), error_resp.status_code
+
+    entity_by_lock_id = {str(lock_id): entity_id for entity_id, lock_id in LOCK_ENTITIES.items()}
+    return jsonify({"nukiLocks": nuki_locks, "haLockEntities": ha_entities, "mapping": entity_by_lock_id})
+
+
+@app.route("/api/lock-mapping", methods=["POST"])
+def save_lock_mapping():
+    """Persists the mapping as the add-on's own `lock_entities` option (via
+    the Supervisor's self-management API) and restarts the add-on so the
+    WebSocket listener picks up the new value - config.yaml options are
+    only read once, at startup, via bashio in run.sh."""
+    err = _require_token()
+    if err:
+        return err
+    if not SUPERVISOR_TOKEN:
+        return jsonify({"error": "Home Assistant API access is not available to this add-on."}), 400
+
+    data = request.get_json(force=True) or {}
+    mapping = data.get("mapping") or {}
+    lock_entities = ",".join(f"{entity_id}={lock_id}" for lock_id, entity_id in mapping.items() if entity_id)
+
+    resp = requests.post(
+        f"{HASSIO_SELF_API_URL}/options",
+        headers=_ha_auth_headers(),
+        json={"options": {"lock_entities": lock_entities}},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        return jsonify({"error": _supervisor_error_message(resp)}), resp.status_code
+
+    def _restart_after_response():
+        time.sleep(1)
+        try:
+            requests.post(f"{HASSIO_SELF_API_URL}/restart", headers=_ha_auth_headers(), timeout=5)
+        except requests.RequestException:
+            pass
+
+    threading.Thread(target=_restart_after_response, daemon=True).start()
+    return jsonify({"status": "saved", "restarting": True})
 
 
 @app.route("/api/codes", methods=["GET"])

@@ -97,7 +97,7 @@
   button.danger { background: var(--danger); color: #2a0d0a; }
   button.secondary { background: #ffffff1c; color: var(--text); }
   button:disabled { opacity: 0.5; cursor: default; }
-  input {
+  input, select {
     background: #1a1d24;
     border: 1px solid #ffffff20;
     color: var(--text);
@@ -142,6 +142,22 @@
       <button type="button" id="refreshBtn">Refresh</button>
     </div>
     <div id="codeList"><div id="empty">Loading…</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <strong>Lock Activity Logging</strong>
+      <button type="button" id="lockMappingRefreshBtn">Refresh</button>
+    </div>
+    <div class="code-meta" style="margin-bottom: 10px;">
+      Match each Nuki lock to its Home Assistant lock entity to log who
+      unlocked/locked it (and how - keypad, app, button, etc.) in the HA Logbook.
+    </div>
+    <div id="lockMappingRows"><div id="lockMappingEmpty">Loading…</div></div>
+    <div class="form-buttons" style="margin-top: 12px;">
+      <button type="button" id="lockMappingSaveBtn">Save</button>
+    </div>
+    <div id="lockMappingStatus" class="code-meta" style="margin-top: 8px;"></div>
   </div>
 
   <div class="card">
@@ -480,7 +496,71 @@
       }
     }
 
+    const lockMappingRowsEl = document.getElementById('lockMappingRows');
+    const lockMappingSaveBtn = document.getElementById('lockMappingSaveBtn');
+    const lockMappingStatusEl = document.getElementById('lockMappingStatus');
+    let lockMappingHaEntities = [];
+
+    async function loadLockMapping() {
+      lockMappingRowsEl.innerHTML = '<div id="lockMappingEmpty">Loading…</div>';
+      lockMappingStatusEl.textContent = '';
+      try {
+        const res = await fetch('api/lock-mapping');
+        const data = await res.json();
+        if (!res.ok) {
+          lockMappingRowsEl.innerHTML = `<div id="lockMappingEmpty">${escapeHtml(data.error || 'Failed to load.')}</div>`;
+          return;
+        }
+        lockMappingHaEntities = data.haLockEntities;
+        renderLockMappingRows(data.nukiLocks, data.mapping);
+      } catch (e) {
+        lockMappingRowsEl.innerHTML = '<div id="lockMappingEmpty">Could not reach the add-on backend.</div>';
+      }
+    }
+
+    function renderLockMappingRows(nukiLocks, mapping) {
+      if (!nukiLocks.length) {
+        lockMappingRowsEl.innerHTML = '<div id="lockMappingEmpty">No locks found on this account.</div>';
+        return;
+      }
+      lockMappingRowsEl.innerHTML = nukiLocks.map(l => {
+        const current = mapping[String(l.id)] || '';
+        const options = ['<option value="">— Not logged —</option>']
+          .concat(lockMappingHaEntities.map(e => `<option value="${escapeHtml(e.entityId)}" ${e.entityId === current ? 'selected' : ''}>${escapeHtml(e.name)} (${escapeHtml(e.entityId)})</option>`))
+          .join('');
+        return `
+          <div class="code-row">
+            <div class="code-name">${escapeHtml(l.name)}</div>
+            <select data-lock-id="${l.id}">${options}</select>
+          </div>
+        `;
+      }).join('');
+    }
+
+    lockMappingSaveBtn.addEventListener('click', async () => {
+      lockMappingStatusEl.textContent = 'Saving…';
+      const mapping = {};
+      lockMappingRowsEl.querySelectorAll('select[data-lock-id]').forEach(sel => {
+        mapping[sel.dataset.lockId] = sel.value;
+      });
+      try {
+        const res = await fetch('api/lock-mapping', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mapping })
+        });
+        const data = await res.json();
+        if (!res.ok) { lockMappingStatusEl.textContent = data.error || 'Failed to save.'; return; }
+        lockMappingStatusEl.textContent = 'Saved — restarting the add-on to apply (about 10s)…';
+      } catch (e) {
+        lockMappingStatusEl.textContent = 'Could not reach the add-on backend.';
+      }
+    });
+
+    document.getElementById('lockMappingRefreshBtn').addEventListener('click', loadLockMapping);
+
     loadCodes();
+    loadLockMapping();
   </script>
 </body>
 </html>

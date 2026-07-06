@@ -60,9 +60,30 @@ Cloudflare Access setup.
   (`GET /smartlock` returns every lock it has access to), so there's no
   separate lock ID to configure there — `lock_entities` only exists to map
   HA entity IDs to Nuki `smartlockId`s for the Logbook attribution feature.
+  Normally add-on options are one-way (HA supervisor → `run.sh` env vars,
+  read once at startup) but `lock_entities` is the exception: the panel's
+  own "Lock Activity Logging" screen (`GET`/`POST /api/lock-mapping`) writes
+  it back via the Supervisor's self-management API
+  (`POST http://supervisor/addons/self/options`, needs `hassio_api: true`)
+  and then restarts the add-on itself
+  (`POST http://supervisor/addons/self/restart`) so `run.sh` re-reads it —
+  there's no way to change a running process's env vars in place.
 - `Dockerfile` builds from the HA base Python images (`build.yaml` maps
   `aarch64`/`amd64`/`armv7` to `ghcr.io/home-assistant/*-base-python`) and
   runs `run.sh` as the container entrypoint.
+
+## Lock Activity Logging screen (`/api/lock-mapping`)
+
+`GET /api/lock-mapping` returns Nuki's lock list, HA's live `lock.*`
+entities (`_fetch_ha_lock_entities()`, via `GET .../core/api/states`
+filtered by entity_id prefix), and the current mapping (`LOCK_ENTITIES`
+inverted, keyed by Nuki lock ID). The frontend renders one `<select>` per
+Nuki lock. `POST /api/lock-mapping` takes `{"mapping": {"<nukiLockId>":
+"<entityId>"}}`, serializes it back into the same `entity_id=smartlockId`
+comma-separated string `lock_entities` already expects, writes it via the
+Supervisor self-options API, and restarts the add-on (see above) — all
+before this request even returns, from a background thread with a 1s
+delay so the HTTP response reaches the browser first.
 
 ## Logbook attribution (who/how unlocked, not just state)
 
