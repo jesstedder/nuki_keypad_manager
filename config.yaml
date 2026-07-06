@@ -1,5 +1,5 @@
 name: "Nuki Keypad Manager"
-version: "0.3.0"
+version: "0.3.1"
 slug: "nuki_keypad_manager"
 description: "List and create Nuki Keypad PIN codes from a Home Assistant sidebar panel"
 url: "https://github/jesstedder/nuki_keypad_manager"

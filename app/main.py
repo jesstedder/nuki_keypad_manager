@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import threading
@@ -11,6 +12,9 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("nuki_keypad_manager")
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -158,14 +162,18 @@ def _post_logbook_entry(entity_id, name, message):
     if not SUPERVISOR_TOKEN:
         return
     try:
-        requests.post(
+        resp = requests.post(
             f"{CORE_API_URL}/services/logbook/log",
             headers=_ha_auth_headers(),
             json={"name": name, "message": message, "entity_id": entity_id, "domain": "lock"},
             timeout=10,
         )
-    except requests.RequestException:
-        pass
+        if resp.status_code != 200:
+            log.warning("logbook.log call failed for %s (%s): %s", entity_id, resp.status_code, resp.text)
+        else:
+            log.info("logged to HA logbook for %s: %s", entity_id, message)
+    except requests.RequestException as e:
+        log.warning("logbook.log call errored for %s: %s", entity_id, e)
 
 
 def _fetch_ha_lock_entities():
@@ -191,11 +199,16 @@ def _handle_lock_state_change(entity_id, friendly_name):
 
     seen_at = time.time()
     entry = None
-    for _ in range(4):
+    for attempt in range(4):
         entry = _fetch_latest_lock_action(smartlock_id)
         if entry is not None and _log_entry_timestamp(entry) >= seen_at - 5:
+            log.info("found matching Nuki log entry for %s on attempt %d: %s", entity_id, attempt, entry)
             break
         time.sleep(1.5)
+    else:
+        log.warning(
+            "no fresh Nuki log entry for %s after retries; newest candidate: %s", entity_id, entry
+        )
 
     name = friendly_name or entity_id
     if entry is None:
@@ -216,6 +229,7 @@ def _ws_listen_loop():
     if not SUPERVISOR_TOKEN or not LOCK_ENTITIES:
         return
 
+    log.info("starting HA WebSocket listener for lock entities: %s", list(LOCK_ENTITIES))
     backoff = 5
     while True:
         try:
@@ -227,6 +241,7 @@ def _ws_listen_loop():
                 if json.loads(ws.recv()).get("type") != "auth_ok":
                     raise RuntimeError("Home Assistant WebSocket auth failed")
                 ws.send(json.dumps({"id": 1, "type": "subscribe_events", "event_type": "state_changed"}))
+                log.info("connected and subscribed to state_changed events")
                 backoff = 5
 
                 while True:
@@ -239,7 +254,9 @@ def _ws_listen_loop():
                         continue
                     old_state = (data.get("old_state") or {}).get("state")
                     new_state = data.get("new_state") or {}
+                    log.info("state_changed for %s: %s -> %s", entity_id, old_state, new_state.get("state"))
                     if new_state.get("state") not in ("locked", "unlocked") or new_state.get("state") == old_state:
+                        log.info("ignoring %s: not a locked/unlocked transition", entity_id)
                         continue
                     friendly_name = new_state.get("attributes", {}).get("friendly_name")
                     threading.Thread(
@@ -247,7 +264,8 @@ def _ws_listen_loop():
                     ).start()
             finally:
                 ws.close()
-        except Exception:
+        except Exception as e:
+            log.warning("HA WebSocket listener error, reconnecting in %ds: %s", backoff, e)
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
