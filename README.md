@@ -19,9 +19,31 @@ each lock to match, so one edit keeps a code in sync everywhere it's used.
 3. Install it, then open the **Configuration** tab and set:
    - `nuki_api_token`: a token from https://web.nuki.io (Nuki Web must first
      be activated for each lock in the Nuki app, under Features & Configuration)
+   - `lock_entities` (optional): comma-separated `entity_id=smartlockId` pairs,
+     e.g. `lock.front_door=12345678,lock.garage=87654321`, to log who/how each
+     lock was actuated into the HA Logbook (see below). Look up each lock's
+     `smartlockId` from this add-on's own `GET /api/locks`, or from the Nuki
+     Web dashboard.
 4. Start the add-on and enable **Show in sidebar**. The panel calls
    `GET /smartlock` itself and lists every lock the token has access to in a
    dropdown — no need to look up smartlock IDs by hand.
+
+## Logbook attribution
+
+If `lock_entities` is set, the add-on subscribes to Home Assistant's own
+`state_changed` events (over the Core WebSocket API, proxied through the
+Supervisor — this is why `homeassistant_api: true` is set in `config.yaml`)
+for the mapped lock entities. When one of them flips to `locked`/`unlocked`,
+it queries that lock's Nuki activity log for the newest matching entry and
+pushes a `logbook.log` entry naming who triggered it (the Nuki
+authorization's name — a keypad code, Fob, or app user) and how (keypad,
+app, button, auto-lock, etc.). This exists because HA's Matter integration
+only reports lock state, not the actor — that attribution only exists in
+Nuki's own log.
+
+Nuki's log can lag a couple seconds behind the device's own state push, so
+the add-on retries briefly (~6s) before logging a fallback "no matching
+entry yet" message rather than silently doing nothing.
 
 ## Testing locally (outside Home Assistant)
 

@@ -19,7 +19,13 @@ Cloudflare Access setup.
   the underlying per-lock auth as needed), and `DELETE` (remove a group
   from every lock it's on). All of it proxies to the Nuki Web API, plus a
   route serving the static frontend. There is no database — the Nuki API
-  is the only source of truth, fetched live on every request.
+  is the only source of truth, fetched live on every request. A background
+  daemon thread (`_ws_listen_loop`, started in `if __name__ == "__main__"`)
+  is the exception: it subscribes to HA's own Core WebSocket API for
+  `state_changed` events on the lock entities named in the `lock_entities`
+  option, and reactively queries that lock's Nuki activity log and pushes a
+  `logbook.log` entry (who/how it was actuated) — see "Logbook attribution"
+  below.
 - **Cross-lock grouping**: Nuki has no native concept of a code being
   shared across locks — each lock's `/auth` list is completely
   independent. `list_code_groups()` in `main.py` fetches every lock's auth
@@ -45,16 +51,48 @@ Cloudflare Access setup.
   entries `pending`, which disables Edit/Delete on that group until
   resolved), and polls `GET /api/codes` in the background for up to ~16s to
   reconcile with the real per-lock auth IDs.
-- Config (`nuki_api_token` only — no `smartlock_id`) is supplied by the HA
-  supervisor as an add-on option (defined in `build.yaml`/`config.yaml`'s
-  `options`/`schema`), not env files or repo config. `run.sh` reads it via
-  `bashio::config` and exports it as `NUKI_API_TOKEN` before starting
-  `main.py`. Lock discovery relies on the token alone (`GET /smartlock`
-  returns every lock it has access to), so there's no separate lock ID to
-  configure.
+- Config (`nuki_api_token`, plus optional `lock_entities` — no
+  `smartlock_id`) is supplied by the HA supervisor as add-on options
+  (defined in `build.yaml`/`config.yaml`'s `options`/`schema`), not env
+  files or repo config. `run.sh` reads them via `bashio::config` and
+  exports `NUKI_API_TOKEN`/`NUKI_LOCK_ENTITIES` before starting `main.py`.
+  Lock discovery for the panel itself relies on the token alone
+  (`GET /smartlock` returns every lock it has access to), so there's no
+  separate lock ID to configure there — `lock_entities` only exists to map
+  HA entity IDs to Nuki `smartlockId`s for the Logbook attribution feature.
 - `Dockerfile` builds from the HA base Python images (`build.yaml` maps
   `aarch64`/`amd64`/`armv7` to `ghcr.io/home-assistant/*-base-python`) and
   runs `run.sh` as the container entrypoint.
+
+## Logbook attribution (who/how unlocked, not just state)
+
+HA's Matter integration (how this add-on's user exposes their Nuki lock as
+a `lock.*` entity) only reports locked/unlocked state — it has no concept
+of which keypad code, Fob, or app user triggered it. That attribution only
+exists in Nuki's own per-lock activity log (`GET /smartlock/{id}/log`),
+whose entries' `name`/`authId` fields reference the auth that triggered the
+action, and whose `trigger` field (`TRIGGER_LABELS` in `main.py`) says how
+(`keypad`, `app`, `button`, `auto-lock`, etc.).
+
+Rather than polling that log on a timer, `_ws_listen_loop()` in `main.py`
+opens a long-lived connection to Home Assistant's own Core WebSocket API
+(`ws://supervisor/core/websocket`, proxied by the Supervisor — requires
+`homeassistant_api: true` in `config.yaml`, which is what grants the
+add-on's `SUPERVISOR_TOKEN` permission to speak to Core, not just the
+Supervisor's own API) and subscribes to `state_changed`. When one of the
+entities named in `lock_entities` flips to `locked`/`unlocked`,
+`_handle_lock_state_change()` queries that lock's Nuki log for the newest
+lock/unlock entry and pushes a `logbook.log` service call naming who/how.
+
+Nuki's log can lag a couple seconds behind the device's own state push (the
+same sync delay noted for `/auth` elsewhere in this file), so the handler
+retries for ~6s before falling back to a "no matching entry yet" message —
+deliberately visible rather than silently dropped, since a real door event
+happened either way. Webhook push from Nuki was considered instead of this
+WebSocket-triggered pull, but Nuki's webhooks require applying for their
+"Advanced API" integrator program plus a publicly reachable callback URL,
+which conflicts with this add-on's whole point of running Ingress-only
+with no exposed port.
 
 ## Nuki API domain rules (enforced in `main.py`)
 

@@ -12,7 +12,10 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:dialpad
 panel_title: "Nuki Keypad"
+homeassistant_api: true
 options:
   nuki_api_token: ""
+  lock_entities: ""
 schema:
   nuki_api_token: str
+  lock_entities: str
