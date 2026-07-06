@@ -82,6 +82,15 @@ Nuki lock. `POST /api/lock-mapping` takes `{"mapping": {"<nukiLockId>":
 "<entityId>"}}`, serializes it back into the same `entity_id=smartlockId`
 comma-separated string `lock_entities` already expects, writes it via the
 Supervisor self-options API, and restarts the add-on (see above) — all
+
+`POST /addons/self/options` **replaces** the whole options object rather
+than merging (confirmed the hard way: posting just `{"lock_entities": ...}`
+wiped `nuki_api_token` and failed schema validation with "Missing option
+'nuki_api_token'"). `save_lock_mapping()` therefore does a
+`GET /addons/self/info` first, reads `data.options`, and merges
+`lock_entities` into that before posting — any future option added to
+`config.yaml` needs to flow through this same read-merge-write, not a bare
+`{"lock_entities": ...}` payload.
 before this request even returns, from a background thread with a 1s
 delay so the HTTP response reaches the browser first.
 

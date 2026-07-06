@@ -327,10 +327,19 @@ def save_lock_mapping():
     mapping = data.get("mapping") or {}
     lock_entities = ",".join(f"{entity_id}={lock_id}" for lock_id, entity_id in mapping.items() if entity_id)
 
+    # The Supervisor replaces the whole options object on this endpoint
+    # rather than merging, so the current options (nuki_api_token etc.)
+    # have to be read back and merged in, or saving this wipes them out and
+    # fails schema validation on the missing required fields.
+    info_resp = requests.get(f"{HASSIO_SELF_API_URL}/info", headers=_ha_auth_headers(), timeout=10)
+    if info_resp.status_code != 200:
+        return jsonify({"error": _supervisor_error_message(info_resp)}), info_resp.status_code
+    current_options = info_resp.json().get("data", {}).get("options", {})
+
     resp = requests.post(
         f"{HASSIO_SELF_API_URL}/options",
         headers=_ha_auth_headers(),
-        json={"options": {"lock_entities": lock_entities}},
+        json={"options": {**current_options, "lock_entities": lock_entities}},
         timeout=10,
     )
     if resp.status_code != 200:
